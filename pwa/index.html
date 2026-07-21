@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="auto">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+  <meta name="theme-color" content="#6366F1" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#6366F1" media="(prefers-color-scheme: dark)" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Drape" />
+  <meta name="mobile-web-app-capable" content="yes" />
+
+  <title>Drape — Your Virtual Wardrobe</title>
+  <meta name="description" content="Capture your real clothes, build your digital wardrobe, and try them on in real-time AR. No hardware required." />
+
+  <!-- Favicon / App Icons -->
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <link rel="manifest" href="manifest.json" />
+
+  <!-- Preconnect for performance -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+
+  <!-- Fonts -->
+  <link rel="stylesheet" href="css/styles.css" />
+
+  <!-- MediaPipe Vision Tasks (loaded as global for ES module compat) -->
+  <script>
+    // Expose MediaPipe as a promise on window for the tryon module
+    window.MediaPipeTasksVision = (async () => {
+      try {
+        const module = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs');
+        return module;
+      } catch (e) {
+        console.warn('[MediaPipe] Failed to load:', e.message);
+        return null;
+      }
+    })();
+  </script>
+</head>
+
+<body>
+<div id="app">
+
+  <!-- ═══════════════════════════════════════════════
+       SPLASH SCREEN
+  ═══════════════════════════════════════════════ -->
+  <div id="screen-splash" class="screen" role="status" aria-live="polite">
+    <div class="splash-logo" aria-hidden="true">
+      <svg width="52" height="52" viewBox="0 0 52 52" fill="none">
+        <!-- Hanger icon -->
+        <path d="M26 8C26 8 24 10 24 12C24 14.2 25.8 16 28 16" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+        <circle cx="26" cy="7" r="2.5" fill="white"/>
+        <path d="M8 40L19 24C19 24 22 20 26 20C30 20 33 24 33 24L44 40" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+        <path d="M8 40H44" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+      </svg>
+    </div>
+    <div class="splash-wordmark">Drape</div>
+    <div class="splash-tagline">Your virtual wardrobe</div>
+    <div class="splash-loader" aria-hidden="true">
+      <div class="splash-dot"></div>
+      <div class="splash-dot"></div>
+      <div class="splash-dot"></div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════
+       HOME SCREEN
+  ═══════════════════════════════════════════════ -->
+  <div id="screen-home" class="screen" role="main" aria-label="Home">
+    <div class="home-scroll">
+      <!-- Header -->
+      <header class="home-header">
+        <div class="greeting-chip" aria-hidden="true">
+          <span>✨</span> Good styling
+        </div>
+        <h1 class="home-title">
+          Your<br /><span>Wardrobe</span><br />Awaits
+        </h1>
+      </header>
+
+      <!-- Stats strip -->
+      <div class="stats-strip" role="region" aria-label="Wardrobe statistics">
+        <div class="stat-card">
+          <div class="stat-card__number" id="stat-total">0</div>
+          <div class="stat-card__label">Items</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-card__number" id="stat-types">0</div>
+          <div class="stat-card__label">Types</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-card__number">∞</div>
+          <div class="stat-card__label">Outfits</div>
+        </div>
+      </div>
+
+      <!-- Hero try-on card -->
+      <section class="hero-card" role="region" aria-label="Try-on feature">
+        <div class="hero-card__eyebrow">Real-Time AR</div>
+        <h2 class="hero-card__title">Try On<br />Right Now</h2>
+        <p class="hero-card__subtitle">
+          See your actual clothes on you<br />through your camera, live.
+        </p>
+        <button class="hero-card__cta" id="hero-tryon-btn" aria-label="Open AR try-on">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+          </svg>
+          Start Try-On
+        </button>
+        <div class="hero-card__figure" aria-hidden="true">✨</div>
+      </section>
+
+      <!-- Recent wardrobe -->
+      <section role="region" aria-label="Recent garments">
+        <div class="section-header">
+          <h2 class="section-title">Recent</h2>
+          <button class="section-action" id="wardrobe-see-all" aria-label="See all wardrobe items">See All</button>
+        </div>
+        <div class="garment-scroll" id="home-recent-scroll" role="list" aria-label="Recent garments">
+          <!-- Populated dynamically -->
+        </div>
+      </section>
+
+      <!-- Bottom padding for tab bar -->
+      <div style="height: 16px;"></div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════
+       WARDROBE SCREEN
+  ═══════════════════════════════════════════════ -->
+  <div id="screen-wardrobe" class="screen" role="main" aria-label="Wardrobe">
+    <!-- Nav bar -->
+    <header class="nav-bar">
+      <h1 class="nav-bar__title nav-bar__title--large">Wardrobe</h1>
+      <button class="nav-bar__btn" onclick="window.drapeApp.openCapture()" aria-label="Add garment">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+        </svg>
+      </button>
+    </header>
+
+    <!-- Category filters -->
+    <nav class="wardrobe-filters" role="navigation" aria-label="Filter garments">
+      <button class="filter-chip active" data-filter="all">All</button>
+      <button class="filter-chip" data-filter="tshirt">👕 T-Shirts</button>
+      <button class="filter-chip" data-filter="shirt">👔 Shirts</button>
+      <button class="filter-chip" data-filter="jacket">🧥 Jackets</button>
+      <button class="filter-chip" data-filter="pants">👖 Pants</button>
+      <button class="filter-chip" data-filter="jeans">🩲 Jeans</button>
+      <button class="filter-chip" data-filter="shorts">🩳 Shorts</button>
+      <button class="filter-chip" data-filter="dress">👗 Dresses</button>
+    </nav>
+
+    <!-- Garment grid -->
+    <main class="wardrobe-grid" id="wardrobe-grid" role="list" aria-label="Garment collection">
+      <!-- Populated dynamically -->
+    </main>
+
+    <!-- Try-on action bar (appears when garments selected) -->
+    <div class="tryon-action-bar" id="tryon-action-bar" role="complementary" aria-label="Try-on selection">
+      <div class="tryon-action-bar__content">
+        <div>
+          <div class="tryon-action-bar__info" id="tryon-bar-info">0 garments selected</div>
+          <div class="tryon-action-bar__sub"  id="tryon-bar-sub">Tap garments to select</div>
+        </div>
+        <button class="btn-tryon-launch" id="tryon-launch-btn" aria-label="Launch AR try-on with selected garments">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+          </svg>
+          Try On
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════
+       CAPTURE FLOW SCREEN
+  ═══════════════════════════════════════════════ -->
+  <div id="screen-capture" class="screen" role="dialog" aria-modal="true" aria-label="Add garment">
+    <!-- Close button -->
+    <button class="capture-close-btn" id="capture-close-btn" aria-label="Close capture">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-primary)" stroke-width="2.5">
+        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+      </svg>
+    </button>
+
+    <!-- Step indicator -->
+    <div class="capture-steps-indicator" role="progressbar" aria-valuenow="1" aria-valuemin="1" aria-valuemax="4" aria-label="Capture step">
+      <div class="step-dot active" aria-label="Step 1: Choose category"></div>
+      <div class="step-dot"        aria-label="Step 2: Take photo"></div>
+      <div class="step-dot"        aria-label="Step 3: Processing"></div>
+      <div class="step-dot"        aria-label="Step 4: Review"></div>
+    </div>
+
+    <!-- ── Step 1: Choose Category ── -->
+    <div class="capture-step active" id="capture-step-1">
+      <h2 class="capture-step-title">What are you adding?</h2>
+      <p  class="capture-step-sub">Select the type of garment you're about to photograph.</p>
+      <div class="category-grid" id="category-grid" role="list" aria-label="Garment categories">
+        <!-- Populated by capture.js -->
+      </div>
+    </div>
+
+    <!-- ── Step 2: Camera ── -->
+    <div class="capture-step" id="capture-step-2">
+      <div class="camera-container">
+        <video id="capture-video" autoplay playsinline muted aria-label="Camera preview"></video>
+        <canvas id="capture-canvas" aria-hidden="true"></canvas>
+        <div class="camera-guide" aria-hidden="true"></div>
+        <div class="camera-tip" aria-live="polite">Lay garment flat or hold it up against a plain background</div>
+      </div>
+      <div class="shutter-container">
+        <button class="flip-btn" id="flip-camera-btn" aria-label="Flip camera">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M1 4v6h6"/><path d="M23 20v-6h-6"/>
+            <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/>
+          </svg>
+        </button>
+        <button class="shutter-btn" id="shutter-btn" aria-label="Take photo">
+          <span class="sr-only">Capture garment photo</span>
+        </button>
+        <div style="width:44px;"></div><!-- spacer -->
+      </div>
+    </div>
+
+    <!-- ── Step 3: Processing ── -->
+    <div class="capture-step" id="capture-step-3">
+      <div class="processing-view">
+        <img class="processing-preview" id="processing-preview" src="" alt="Captured garment" style="display:none;" />
+        <div class="processing-spinner" aria-hidden="true"></div>
+        <div class="processing-title">Analyzing garment…</div>
+        <p class="processing-subtitle">Our AI is removing the background<br />and preparing your garment.</p>
+      </div>
+    </div>
+
+    <!-- ── Step 4: Review & Save ── -->
+    <div class="capture-step" id="capture-step-4">
+      <h2 class="capture-step-title">Looking good!</h2>
+      <div class="review-view">
+        <!-- Garment preview -->
+        <img class="review-garment-preview" id="review-garment-img" src="" alt="Processed garment" style="display:none;" />
+        <div class="review-garment-emoji"    id="review-garment-emoji" aria-hidden="true">👗</div>
+
+        <!-- Name field -->
+        <div class="form-field">
+          <label class="form-label" for="garment-name-input">Name</label>
+          <input
+            type="text"
+            id="garment-name-input"
+            class="form-input"
+            placeholder="e.g. Blue Linen Shirt"
+            maxlength="40"
+            autocomplete="off"
+            spellcheck="false"
+          />
+        </div>
+
+        <!-- Color picker -->
+        <div class="form-field">
+          <label class="form-label">Primary Color</label>
+          <div class="color-picker-row" id="color-picker-row" role="radiogroup" aria-label="Select garment color">
+            <!-- Populated by capture.js -->
+          </div>
+        </div>
+      </div>
+
+      <!-- Save bar -->
+      <div class="capture-save-bar">
+        <button class="btn-primary" id="save-garment-btn" aria-label="Add garment to wardrobe">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+            <polyline points="17,21 17,13 7,13 7,21"/>
+            <polyline points="7,3 7,8 15,8"/>
+          </svg>
+          Add to Wardrobe
+        </button>
+        <button class="btn-secondary" id="retake-btn" aria-label="Retake photo">
+          Retake Photo
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════
+       TRY-ON SCREEN (AR Camera)
+  ═══════════════════════════════════════════════ -->
+  <div id="screen-tryon" class="screen" role="main" aria-label="AR Try-On">
+    <!-- Camera view -->
+    <div class="tryon-camera-view">
+      <video id="tryon-video" autoplay playsinline muted aria-label="Try-on camera feed"></video>
+      <canvas id="tryon-canvas" aria-hidden="true"></canvas>
+
+      <!-- Top bar -->
+      <div class="tryon-top-bar">
+        <div class="tryon-title">Try On</div>
+        <button class="tryon-close" id="tryon-close-btn" aria-label="Close try-on">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Pose detection status -->
+      <div class="pose-status" id="pose-status" aria-live="polite" aria-atomic="true">
+        <div class="pose-dot" id="pose-dot"></div>
+        <span id="pose-status-text">Initializing…</span>
+      </div>
+
+      <!-- Sheet overlay (for garment picker) -->
+      <div class="sheet-overlay" id="sheet-overlay" role="presentation"></div>
+
+      <!-- Garment picker bottom sheet -->
+      <div class="bottom-sheet" id="garment-picker-sheet" role="dialog" aria-modal="true" aria-label="Select garment to try on">
+        <div class="sheet-handle" aria-hidden="true"></div>
+        <div class="sheet-title">Add to Try-On</div>
+        <div class="sheet-garment-grid" id="sheet-garment-grid" role="list">
+          <!-- Populated dynamically -->
+        </div>
+      </div>
+
+      <!-- Bottom garment shelf -->
+      <div class="tryon-garment-shelf">
+        <div class="tryon-shelf-title">Wearing</div>
+        <div class="tryon-garment-row" id="tryon-garment-row" role="list" aria-label="Currently trying on">
+          <!-- Populated dynamically -->
+        </div>
+        <button class="tryon-add-garment" id="tryon-add-btn" aria-label="Add garment to try-on" style="margin-top:8px;">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.6)" stroke-width="2.5">
+            <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════
+       SETTINGS SCREEN
+  ═══════════════════════════════════════════════ -->
+  <div id="screen-settings" class="screen" role="main" aria-label="Settings">
+    <!-- Nav bar -->
+    <header class="nav-bar">
+      <h1 class="nav-bar__title nav-bar__title--large">Settings</h1>
+    </header>
+
+    <div class="settings-scroll">
+      <!-- Profile -->
+      <div class="profile-section">
+        <div class="profile-avatar" aria-hidden="true">✨</div>
+        <div class="profile-name">Your Wardrobe</div>
+        <div class="profile-sub" id="settings-garment-count">0 garments</div>
+      </div>
+
+      <!-- Appearance -->
+      <div>
+        <p class="settings-group-label">Appearance</p>
+        <div class="theme-selector" role="radiogroup" aria-label="Theme selection">
+          <button class="theme-option" data-theme="light" aria-label="Light theme">
+            <div class="theme-preview theme-preview--light">
+              <div style="position:absolute;top:6px;left:6px;right:6px;height:4px;background:#C6C6C8;border-radius:2px;"></div>
+              <div style="position:absolute;top:14px;left:6px;right:10px;height:3px;background:#D1D1D6;border-radius:2px;"></div>
+            </div>
+            <span class="theme-label">Light</span>
+          </button>
+          <button class="theme-option" data-theme="dark" aria-label="Dark theme">
+            <div class="theme-preview theme-preview--dark">
+              <div style="position:absolute;top:6px;left:6px;right:6px;height:4px;background:#48484A;border-radius:2px;"></div>
+              <div style="position:absolute;top:14px;left:6px;right:10px;height:3px;background:#3A3A3C;border-radius:2px;"></div>
+            </div>
+            <span class="theme-label">Dark</span>
+          </button>
+          <button class="theme-option selected" data-theme="auto" aria-label="System theme">
+            <div class="theme-preview theme-preview--auto"></div>
+            <span class="theme-label">Auto</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- About -->
+      <div>
+        <p class="settings-group-label">App</p>
+        <div class="settings-group">
+          <div class="settings-row">
+            <div class="settings-row__icon" style="background: linear-gradient(135deg, #818CF8, #6366F1);">
+              <span>✨</span>
+            </div>
+            <div class="settings-row__label">Drape</div>
+            <div class="settings-row__value">v0.1 POC</div>
+          </div>
+          <div class="settings-row">
+            <div class="settings-row__icon" style="background: linear-gradient(135deg, #34C759, #30B955);">
+              <span>🔒</span>
+            </div>
+            <div class="settings-row__label">Privacy</div>
+            <div class="settings-row__value" style="font-size:12px;color:var(--color-success);">On-device only</div>
+          </div>
+          <div class="settings-row">
+            <div class="settings-row__icon" style="background: linear-gradient(135deg, #FF9500, #FF6B00);">
+              <span>🤖</span>
+            </div>
+            <div class="settings-row__label">AI Pose Model</div>
+            <div class="settings-row__value" style="font-size:12px;">MediaPipe Lite</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Wardrobe management -->
+      <div>
+        <p class="settings-group-label">Wardrobe</p>
+        <div class="settings-group">
+          <div class="settings-row" onclick="window.drapeApp.switchTab('wardrobe')" style="cursor:pointer;">
+            <div class="settings-row__icon" style="background: linear-gradient(135deg, #6366F1, #4F46E5);">
+              <span>👗</span>
+            </div>
+            <div class="settings-row__label">My Wardrobe</div>
+            <svg class="settings-row__chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M9 18l6-6-6-6"/>
+            </svg>
+          </div>
+          <div class="settings-row" onclick="window.drapeApp.openCapture()" style="cursor:pointer;">
+            <div class="settings-row__icon" style="background: linear-gradient(135deg, #32ADE6, #0080C6);">
+              <span>📷</span>
+            </div>
+            <div class="settings-row__label">Add Garment</div>
+            <svg class="settings-row__chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M9 18l6-6-6-6"/>
+            </svg>
+          </div>
+        </div>
+      </div>
+
+      <!-- Technology Credits -->
+      <div style="padding: 8px 4px; text-align: center;">
+        <p style="font-size: 12px; color: var(--text-tertiary); line-height: 1.6;">
+          Powered by MediaPipe Pose · Background removal by IMG.LY<br />
+          All processing happens on your device. Your photos never leave.
+        </p>
+      </div>
+
+      <!-- Bottom padding -->
+      <div style="height: 16px;"></div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════
+       TAB BAR
+  ═══════════════════════════════════════════════ -->
+  <nav class="tab-bar" role="navigation" aria-label="Main navigation">
+    <button class="tab-btn active" data-tab="home" aria-label="Home">
+      <div class="tab-btn__icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+          <polyline points="9,22 9,12 15,12 15,22"/>
+        </svg>
+      </div>
+      <span class="tab-btn__label">Home</span>
+    </button>
+
+    <button class="tab-btn" data-tab="wardrobe" aria-label="Wardrobe">
+      <div class="tab-btn__icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="M20.38 3.46L16 2a4 4 0 0 1-8 0L3.62 3.46a2 2 0 0 0-1.34 2.23l.58 3.57a1 1 0 0 0 .99.84H5v10c0 1.1.9 2 2 2h10a2 2 0 0 0 2-2V10h1.15a1 1 0 0 0 .99-.84l.58-3.57a2 2 0 0 0-1.34-2.23z"/>
+        </svg>
+      </div>
+      <span class="tab-btn__label">Wardrobe</span>
+    </button>
+
+    <button class="tab-btn tab-btn--capture" data-tab="capture" aria-label="Add garment">
+      <div class="capture-pill">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M20 7h-3l-2-3H9L7 7H4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/>
+        </svg>
+      </div>
+      <span class="tab-btn__label">Capture</span>
+    </button>
+
+    <button class="tab-btn" data-tab="tryon" aria-label="Try On">
+      <div class="tab-btn__icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="M23 7l-7 5 7 5V7z"/>
+          <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+        </svg>
+      </div>
+      <span class="tab-btn__label">Try On</span>
+    </button>
+
+    <button class="tab-btn" data-tab="settings" aria-label="Settings">
+      <div class="tab-btn__icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </div>
+      <span class="tab-btn__label">Settings</span>
+    </button>
+  </nav>
+
+</div><!-- /#app -->
+
+<!-- Main app entry point (ES Module) -->
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,42 @@
+{
+  "name": "Drape — Your Virtual Wardrobe",
+  "short_name": "Drape",
+  "description": "Capture your real clothes, build your digital wardrobe, and try them on in real-time AR.",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#000000",
+  "theme_color": "#6366F1",
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["lifestyle", "fashion", "utilities"],
+  "screenshots": [],
+  "shortcuts": [
+    {
+      "name": "Try On",
+      "short_name": "Try On",
+      "description": "Open the AR try-on camera",
+      "url": "/?screen=tryon",
+      "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Add Garment",
+      "short_name": "Capture",
+      "description": "Add a new garment to your wardrobe",
+      "url": "/?screen=capture",
+      "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}
