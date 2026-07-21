@@ -14,9 +14,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize the U2Net-Clothing model
-# This runs once when the server starts.
-session = rembg.new_session("u2net_cloth_seg")
+# Do NOT initialize the model at the global level!
+# It blocks Uvicorn from starting and causes Render port timeouts.
+session = None
+
+def get_session():
+    global session
+    if session is None:
+        print("Initializing U2Net-Clothing model (this may take a moment)...")
+        session = rembg.new_session("u2net_cloth_seg")
+    return session
 
 @app.get("/health")
 def health():
@@ -27,6 +34,6 @@ async def remove_bg(file: UploadFile = File(...)):
     contents = await file.read()
     
     # Process the image with the clothing segmentation model
-    output_image = rembg.remove(contents, session=session)
+    output_image = rembg.remove(contents, session=get_session())
     
     return Response(content=output_image, media_type="image/png")
