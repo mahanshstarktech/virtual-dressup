@@ -35,9 +35,15 @@ async def remove_bg(file: UploadFile = File(...)):
     return Response(content=output_image, media_type="image/png")
 
 # Gradio requires a basic UI to be defined to run a Space.
-# This dummy UI satisfies the requirement, while our API runs in the background!
+# We MUST pass a @spaces.GPU decorated function directly into the Interface
+# so that Hugging Face's ZeroGPU startup checks can detect it.
+
+@spaces.GPU
+def dummy_gpu_task():
+    return "Backend API is running! Endpoint: /api/remove-bg"
+
 demo = gr.Interface(
-    fn=lambda: "Backend API is running! Endpoint: /api/remove-bg",
+    fn=dummy_gpu_task,
     inputs=None,
     outputs="text",
     title="Virtual Dressup Backend"
