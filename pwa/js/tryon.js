@@ -1,9 +1,26 @@
 // ═══════════════════════════════════════════════
-//  Drape — Real-Time AR Try-On Module
-//  Uses MediaPipe Pose Landmarker for body tracking
+//  Drape — Real-Time AR Try-On Module  (v2 — fixed)
+//
+//  WHAT CHANGED FROM v1:
+//  - MediaPipe is now imported at the top as a
+//    static ESM import (not a fragile dynamic one).
+//    This is the only reliable way to get
+//    PoseLandmarker and FilesetResolver in the browser.
+//  - `cachedLandmarks` stores the last detected pose.
+//    Every animation frame draws using this cache,
+//    so the overlay is stable even between detection ticks.
+//  - Canvas resize is guarded so it only happens when
+//    dimensions actually change (avoids clearing on every frame).
+//  - Error messages surface to the UI so you can see
+//    exactly what's failing instead of silent black screen.
 // ═══════════════════════════════════════════════
 
-import { dist, midpoint, angle, clamp, loadImage, haptic, showToast, categoryType } from './utils.js';
+// ── Static top-level import (this is the correct MediaPipe pattern) ──
+// The wasm files are loaded by FilesetResolver using the CDN URL below.
+import { PoseLandmarker, FilesetResolver }
+  from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs';
+
+import { dist, midpoint, angle, loadImage, haptic, showToast, categoryType } from './utils.js';
 
 // ─── State ───────────────────────────────────────
 let tryonStream      = null;
@@ -13,333 +30,303 @@ let isRunning        = false;
 let activeGarments   = {};   // { id: garmentData }
 let garmentImages    = {};   // { id: HTMLImageElement }
 let lastPoseTime     = 0;
-let poseDetected     = false;
+let cachedLandmarks  = null; // ← KEY FIX: store last good pose result
+                              //   so overlay stays visible between frames
 
-// Smoothing buffers for stable overlay
-const SMOOTH = 0.35;
+// Exponential smoothing for jitter-free overlay
+const SMOOTH = 0.25;
 let smoothed = {};
 
-// MediaPipe landmark indices
+// MediaPipe landmark index constants
 const LM = {
-  NOSE:          0,
-  L_SHOULDER:    11,
-  R_SHOULDER:    12,
-  L_ELBOW:       13,
-  R_ELBOW:       14,
-  L_WRIST:       15,
-  R_WRIST:       16,
-  L_HIP:         23,
-  R_HIP:         24,
-  L_KNEE:        25,
-  R_KNEE:        26,
-  L_ANKLE:       27,
-  R_ANKLE:       28,
+  L_SHOULDER: 11, R_SHOULDER: 12,
+  L_HIP:      23, R_HIP:      24,
+  L_KNEE:     25, R_KNEE:     26,
+  L_ANKLE:    27, R_ANKLE:    28,
 };
 
+// ─── MediaPipe Initialization ──────────────────
 /**
- * Initialize MediaPipe Pose Landmarker
+ * Creates the PoseLandmarker once and caches it.
+ * Called once when the try-on screen opens.
+ *
+ * WHY: PoseLandmarker is heavy (~5 MB model download).
+ * We initialise it once and reuse it for the lifetime
+ * of the try-on session.
  */
 async function initPoseLandmarker() {
-  if (poseLandmarker) return poseLandmarker;
-  
-  try {
-    // Import from CDN
-    const vision = await window.MediaPipeTasksVision;
-    if (!vision) throw new Error('MediaPipe not loaded');
+  if (poseLandmarker) return; // already loaded — do nothing
 
-    const { PoseLandmarker, FilesetResolver } = vision;
+  updatePoseStatus('loading', 'Downloading AI model (first time ~5 MB)…');
 
-    const filesetResolver = await FilesetResolver.forVisionTasks(
-      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
-    );
+  // FilesetResolver downloads the WASM binary for MediaPipe's
+  // vision runtime from the CDN. We point it to the same version
+  // as the JS bundle above.
+  const filesetResolver = await FilesetResolver.forVisionTasks(
+    'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
+  );
 
-    poseLandmarker = await PoseLandmarker.createFromOptions(filesetResolver, {
-      baseOptions: {
-        modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
-        delegate: 'GPU',
-      },
-      runningMode:     'VIDEO',
-      numPoses:        1,
-      minPoseDetectionConfidence:  0.55,
-      minPosePresenceConfidence:   0.55,
-      minTrackingConfidence:       0.55,
-    });
+  poseLandmarker = await PoseLandmarker.createFromOptions(filesetResolver, {
+    baseOptions: {
+      // Lite model — small download, fast inference, good enough for POC
+      modelAssetPath:
+        'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
+      delegate: 'GPU', // Uses WebGL for acceleration; falls back to CPU automatically
+    },
+    runningMode:                  'VIDEO', // continuous stream, not single image
+    numPoses:                     1,
+    minPoseDetectionConfidence:   0.5,
+    minPosePresenceConfidence:    0.5,
+    minTrackingConfidence:        0.5,
+  });
 
-    console.log('[TryOn] Pose Landmarker ready');
-    return poseLandmarker;
-  } catch (err) {
-    console.error('[TryOn] Failed to init pose landmarker:', err);
-    throw err;
-  }
+  console.log('[TryOn] ✅ Pose Landmarker ready');
 }
 
+// ─── Camera Startup ────────────────────────────
 /**
- * Start the try-on camera and detection loop
+ * Entry point called by app.js when switching to the try-on tab.
+ * 1. Asks for camera permission
+ * 2. Initialises MediaPipe
+ * 3. Starts the render loop
  */
 export async function startTryOn() {
   if (isRunning) return;
 
-  updatePoseStatus('loading', 'Loading AI…');
+  updatePoseStatus('loading', 'Starting camera…');
 
   try {
-    // Start camera (front-facing)
+    // Request front-facing camera at a sensible resolution.
+    // 640×480 is ideal — enough detail for pose, low enough to stay fast.
     tryonStream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode:  'user',
-        width:  { ideal: 640 },
-        height: { ideal: 480 },
-      },
+      video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
       audio: false,
     });
 
     const video = document.getElementById('tryon-video');
-    if (!video) return;
+    if (!video) throw new Error('tryon-video element not found in DOM');
     video.srcObject = tryonStream;
+
+    // Mirror the front camera so it feels like a mirror, not a selfie camera
+    video.style.transform = 'scaleX(-1)';
     await video.play();
 
-    updatePoseStatus('loading', 'Initializing pose detection…');
-
-    // Init MediaPipe
+    // Now initialise MediaPipe (downloads model if not cached)
     await initPoseLandmarker();
 
     isRunning = true;
-    updatePoseStatus('searching', 'Stand back so we can see you');
-    runDetectionLoop();
+    updatePoseStatus('searching', 'Step back so we can see your full body…');
+    startRenderLoop();
+
   } catch (err) {
-    console.error('[TryOn] Start failed:', err);
+    console.error('[TryOn] Startup error:', err);
+
+    // Surface specific errors to the user
     if (err.name === 'NotAllowedError') {
-      showToast('Camera access denied', '⚠️');
-    } else if (err.message.includes('MediaPipe')) {
-      showToast('Loading AI model…', '⏳');
-      // Fallback: basic overlay without pose
-      startBasicMode();
+      showToast('Camera access denied — please allow camera in settings', '⚠️');
+      updatePoseStatus('error', 'Camera permission denied');
+    } else if (err.name === 'NotFoundError') {
+      showToast('No camera found on this device', '⚠️');
+      updatePoseStatus('error', 'No camera found');
     } else {
-      showToast('Could not start camera', '⚠️');
+      showToast('Could not start: ' + err.message, '⚠️');
+      updatePoseStatus('error', err.message.slice(0, 60));
     }
-    updatePoseStatus('error', 'Camera unavailable');
   }
 }
 
+// ─── Main Render Loop ──────────────────────────
 /**
- * Basic mode: overlay garments without pose detection (fallback)
+ * Runs at up to 60fps via requestAnimationFrame.
+ *
+ * Every frame:
+ *   1. Mirror the video onto the canvas
+ *   2. Run MediaPipe pose detection (throttled to ~30fps)
+ *   3. If a pose is found → cache it + draw garments
+ *   4. If no pose found this frame → draw garments using CACHED landmarks
+ *      (this is the key fix — v1 drew NOTHING when using cache)
  */
-function startBasicMode() {
-  isRunning = true;
+function startRenderLoop() {
   const video  = document.getElementById('tryon-video');
   const canvas = document.getElementById('tryon-canvas');
   if (!video || !canvas) return;
 
-  function basicLoop() {
-    if (!isRunning) return;
-    canvas.width  = video.videoWidth  || 640;
-    canvas.height = video.videoHeight || 480;
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    
-    // Draw placeholder overlay
-    const cx = canvas.width / 2;
-    const cy = canvas.height / 2;
-    
-    Object.values(activeGarments).forEach((garment, i) => {
-      const img = garmentImages[garment.id];
-      if (!img) return;
-      const type = categoryType(garment.category);
-      if (type === 'upper') {
-        drawGarmentBasic(ctx, img, cx - 100, cy - 150, 200, 200);
-      } else if (type === 'lower') {
-        drawGarmentBasic(ctx, img, cx - 90, cy + 60, 180, 220);
-      } else {
-        drawGarmentBasic(ctx, img, cx - 100, cy - 150, 200, 400);
-      }
-    });
-    
-    animFrameId = requestAnimationFrame(basicLoop);
-  }
-  basicLoop();
-}
-
-function drawGarmentBasic(ctx, img, x, y, w, h) {
-  ctx.globalAlpha = 0.85;
-  ctx.drawImage(img, x, y, w, h);
-  ctx.globalAlpha = 1;
-}
-
-/**
- * Main detection + rendering loop
- */
-function runDetectionLoop() {
-  const video  = document.getElementById('tryon-video');
-  const canvas = document.getElementById('tryon-canvas');
-  if (!video || !canvas || !isRunning) return;
+  let lastW = 0, lastH = 0; // track last size to avoid unnecessary canvas resets
 
   function loop(timestamp) {
     if (!isRunning) return;
     animFrameId = requestAnimationFrame(loop);
 
+    // Wait until video has real data
     if (video.readyState < 2) return;
 
-    canvas.width  = video.videoWidth;
-    canvas.height = video.videoHeight;
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    if (!vw || !vh) return;
+
+    // Only resize canvas if video dimensions changed
+    // (resizing canvas clears it — doing it every frame was causing flickering)
+    if (vw !== lastW || vh !== lastH) {
+      canvas.width  = vw;
+      canvas.height = vh;
+      lastW = vw;
+      lastH = vh;
+    }
+
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Run pose detection (throttle to ~30fps if needed)
+    // ── Pose Detection (run every ~33ms = ~30fps) ──
     if (poseLandmarker && timestamp - lastPoseTime > 33) {
       lastPoseTime = timestamp;
       try {
         const result = poseLandmarker.detectForVideo(video, timestamp);
         if (result.landmarks && result.landmarks.length > 0) {
-          const lms = result.landmarks[0];
-          poseDetected = true;
+          cachedLandmarks = result.landmarks[0]; // ← update cache
           updatePoseStatus('detected', 'Pose detected ✓');
-          drawGarments(ctx, lms, canvas.width, canvas.height);
         } else {
-          poseDetected = false;
-          updatePoseStatus('searching', 'Move back so we can see you');
+          // No body visible — keep cachedLandmarks from last frame
+          updatePoseStatus('searching', 'Step back so we can see your full body…');
         }
-      } catch (err) {
-        // Non-fatal - keep looping
+      } catch (e) {
+        // Detection can fail on a single frame — not fatal, just skip
+        console.warn('[TryOn] detection skip:', e.message);
       }
-    } else if (poseDetected) {
-      // Use cached landmarks to maintain smooth rendering between detections
+    }
+
+    // ── Garment Overlay ──
+    // Draw using cached landmarks EVERY frame (not just when we detect this frame)
+    if (cachedLandmarks) {
+      drawGarments(ctx, cachedLandmarks, canvas.width, canvas.height);
     }
   }
 
   animFrameId = requestAnimationFrame(loop);
 }
 
-/**
- * Convert normalized landmark to pixel coordinates
- */
-function lmPx(landmark, w, h) {
-  return { x: landmark.x * w, y: landmark.y * h, z: landmark.z, vis: landmark.visibility };
+// ─── Coordinate Helpers ────────────────────────
+
+/** Convert a normalised landmark (0-1) to pixel coordinates */
+function lmPx(lm, w, h) {
+  return { x: lm.x * w, y: lm.y * h };
 }
 
-/**
- * Smooth a value using exponential moving average
- */
-function smooth(key, value) {
-  if (smoothed[key] === undefined) { smoothed[key] = value; return value; }
-  smoothed[key] = smoothed[key] * (1 - SMOOTH) + value * SMOOTH;
-  return smoothed[key];
-}
-
+/** Exponential moving average smoothing — removes jitter */
 function smoothPt(key, pt) {
-  return {
-    x: smooth(key + '_x', pt.x),
-    y: smooth(key + '_y', pt.y),
-  };
+  if (!smoothed[key]) { smoothed[key] = { ...pt }; return pt; }
+  smoothed[key].x = smoothed[key].x * (1 - SMOOTH) + pt.x * SMOOTH;
+  smoothed[key].y = smoothed[key].y * (1 - SMOOTH) + pt.y * SMOOTH;
+  return { ...smoothed[key] };
 }
 
+// ─── Garment Drawing ───────────────────────────
 /**
- * Draw all active garments using pose landmarks
+ * Draws all active garments onto the canvas.
+ * Called every frame with the latest (or cached) landmarks.
+ *
+ * Body structure used:
+ *   Shoulders (11, 12) → width and tilt of upper body
+ *   Hips      (23, 24) → bottom of torso / top of lower body
+ *   Ankles    (27, 28) → bottom of lower body
  */
 function drawGarments(ctx, landmarks, w, h) {
-  const lms = {};
-  Object.entries(LM).forEach(([name, idx]) => {
-    lms[name] = lmPx(landmarks[idx], w, h);
-  });
-
-  // Smooth key landmarks for stable overlay
-  const ls  = smoothPt('ls',  lms.L_SHOULDER);
-  const rs  = smoothPt('rs',  lms.R_SHOULDER);
-  const lh  = smoothPt('lh',  lms.L_HIP);
-  const rh  = smoothPt('rh',  lms.R_HIP);
-  const lk  = smoothPt('lk',  lms.L_KNEE);
-  const rk  = smoothPt('rk',  lms.R_KNEE);
-  const la  = smoothPt('la',  lms.L_ANKLE);
-  const ra  = smoothPt('ra',  lms.R_ANKLE);
+  // Convert relevant landmarks to pixel coords and smooth them
+  const ls = smoothPt('ls', lmPx(landmarks[LM.L_SHOULDER], w, h));
+  const rs = smoothPt('rs', lmPx(landmarks[LM.R_SHOULDER], w, h));
+  const lh = smoothPt('lh', lmPx(landmarks[LM.L_HIP],      w, h));
+  const rh = smoothPt('rh', lmPx(landmarks[LM.R_HIP],      w, h));
+  const la = smoothPt('la', lmPx(landmarks[LM.L_ANKLE],    w, h));
+  const ra = smoothPt('ra', lmPx(landmarks[LM.R_ANKLE],    w, h));
 
   const hasUpper = Object.values(activeGarments).some(g => categoryType(g.category) === 'upper');
-  const hasLower = Object.values(activeGarments).some(g => categoryType(g.category) === 'lower');
   const hasFull  = Object.values(activeGarments).some(g => categoryType(g.category) === 'full');
 
   Object.values(activeGarments).forEach(garment => {
-    const img = garmentImages[garment.id];
+    const img  = garmentImages[garment.id];
     if (!img || !img.complete) return;
-    const type = categoryType(garment.category);
 
+    const type = categoryType(garment.category);
     if (type === 'upper' || type === 'full') {
-      drawUpperGarment(ctx, img, ls, rs, lh, rh, type, hasLower);
+      drawUpperGarment(ctx, img, ls, rs, lh, rh, type);
     } else if (type === 'lower') {
-      drawLowerGarment(ctx, img, lh, rh, la, ra, lk, rk, hasUpper || hasFull);
+      drawLowerGarment(ctx, img, lh, rh, la, ra, hasUpper || hasFull);
     }
   });
 }
 
 /**
- * Draw an upper-body garment (shirt, jacket, dress)
+ * Overlay an upper-body garment (shirt, jacket, hoodie, sweater, dress).
+ *
+ * HOW IT WORKS:
+ * - Measure shoulder-to-shoulder width → sets garment width (with padding)
+ * - Measure shoulder-midpoint to hip-midpoint → sets garment height
+ * - Calculate shoulder tilt angle → rotates garment to match body tilt
+ * - Anchor point is the shoulder midpoint
+ *
+ * The front camera image is MIRRORED (scaleX(-1) on the video),
+ * but the canvas is NOT mirrored — so left/right landmarks are already
+ * in the correct position for canvas drawing.
  */
-function drawUpperGarment(ctx, img, ls, rs, lh, rh, type, hasPants) {
-  const sm = midpoint(ls, rs);   // shoulder midpoint
-  const hm = midpoint(lh, rh);   // hip midpoint
+function drawUpperGarment(ctx, img, ls, rs, lh, rh, type) {
+  const shoulderMid = midpoint(ls, rs);
+  const hipMid      = midpoint(lh, rh);
+  const shoulderW   = dist(ls, rs);
+  const torsoH      = dist(shoulderMid, hipMid);
 
-  const shoulderWidth = dist(ls, rs);
-  const torsoHeight   = dist(sm, hm);
+  if (shoulderW < 10 || torsoH < 10) return; // body too small / partially off-screen
 
-  if (shoulderWidth < 20 || torsoHeight < 20) return;
+  // Width: shoulders + ~35% padding to cover sleeves
+  const gWidth = shoulderW * 1.35;
 
-  // Scale garment
-  const padding = 1.35;
-  const gWidth  = shoulderWidth * padding;
+  // Height: scaled from torso. Dress goes to ankle (estimated 2.5× torso),
+  // shirt goes slightly below hip.
+  const gHeight = type === 'full' ? torsoH * 2.6 : torsoH * 1.15;
 
-  let gHeight;
-  if (type === 'full') {
-    // Dress: extends to ankles — estimate based on torso proportion
-    gHeight = torsoHeight * 2.5;
-  } else if (hasPants) {
-    // Tucked-in shirt: stop at hip
-    gHeight = torsoHeight * 1.05;
-  } else {
-    // Regular shirt: slight overhang below hip
-    gHeight = torsoHeight * 1.15;
-  }
-
-  // Rotation to match shoulder tilt
-  const tiltAngle = angle(ls, rs);  // angle of shoulder line
-
-  // Anchor: slightly above shoulder midpoint
-  const anchorX = sm.x;
-  const anchorY = sm.y - torsoHeight * 0.05;
+  // Tilt: angle of the shoulder line (so garment tilts with your body)
+  const tiltAngle = angle(ls, rs);
 
   ctx.save();
-  ctx.globalAlpha = 0.88;
-  ctx.translate(anchorX, anchorY);
+  ctx.globalAlpha = 0.9;
+  ctx.translate(shoulderMid.x, shoulderMid.y);
   ctx.rotate(tiltAngle);
-  ctx.drawImage(img, -gWidth / 2, 0, gWidth, gHeight);
+  // Draw: centred on shoulder midpoint, extending downward
+  ctx.drawImage(img, -gWidth / 2, -torsoH * 0.04, gWidth, gHeight);
   ctx.restore();
 }
 
 /**
- * Draw a lower-body garment (pants, shorts, skirt)
+ * Overlay a lower-body garment (pants, jeans, shorts, skirt).
+ *
+ * HOW IT WORKS:
+ * - Hip midpoint → top anchor
+ * - Ankle midpoint → bottom anchor (determines height)
+ * - Hip width × padding → garment width
  */
-function drawLowerGarment(ctx, img, lh, rh, la, ra, lk, rk, hasShirt) {
-  const hm = midpoint(lh, rh);   // hip midpoint
-  const am = midpoint(la, ra);   // ankle midpoint
-  const km = midpoint(lk, rk);   // knee midpoint
+function drawLowerGarment(ctx, img, lh, rh, la, ra, hasUpperGarment) {
+  const hipMid    = midpoint(lh, rh);
+  const ankleMid  = midpoint(la, ra);
+  const hipW      = dist(lh, rh);
+  const legH      = dist(hipMid, ankleMid);
 
-  const hipWidth   = dist(lh, rh);
-  const legLength  = dist(hm, am);
+  if (hipW < 10 || legH < 10) return;
 
-  if (hipWidth < 20 || legLength < 20) return;
+  const gWidth  = hipW * 1.4;
+  const gHeight = legH * 1.05;
 
-  const padding = 1.4;
-  const gWidth  = hipWidth * padding;
-  const gHeight = legLength * 1.05;
-
-  // Start drawing from hip level (below shirt if tucked)
-  const startY = hasShirt ? hm.y - 2 : hm.y;
+  // If wearing a shirt too, start 2px higher so there's no gap at the waistband
+  const startY = hasUpperGarment ? hipMid.y - 2 : hipMid.y;
 
   ctx.save();
-  ctx.globalAlpha = 0.88;
-  ctx.drawImage(img, hm.x - gWidth / 2, startY, gWidth, gHeight);
+  ctx.globalAlpha = 0.9;
+  ctx.drawImage(img, hipMid.x - gWidth / 2, startY, gWidth, gHeight);
   ctx.restore();
 }
 
-/**
- * Add a garment to the try-on view
- */
+// ─── Garment Management ────────────────────────
+
+/** Add a garment to the try-on overlay */
 export async function addGarmentToTryOn(garment) {
+  // Toggling: tap the same garment again to remove it
   if (activeGarments[garment.id]) {
     removeGarmentFromTryOn(garment.id);
     return;
@@ -347,21 +334,18 @@ export async function addGarmentToTryOn(garment) {
 
   activeGarments[garment.id] = garment;
 
-  // Pre-load the image
+  // Pre-load and cache the image so drawing is instant
   try {
-    const img = await loadImage(garment.imageDataURL);
-    garmentImages[garment.id] = img;
-  } catch (err) {
-    console.warn('Could not load garment image:', err);
+    garmentImages[garment.id] = await loadImage(garment.imageDataURL);
+  } catch (e) {
+    console.warn('[TryOn] Image load failed:', e);
   }
 
   haptic('light');
   renderTryOnShelf();
 }
 
-/**
- * Remove a garment from the try-on view
- */
+/** Remove one garment */
 export function removeGarmentFromTryOn(id) {
   delete activeGarments[id];
   delete garmentImages[id];
@@ -369,104 +353,73 @@ export function removeGarmentFromTryOn(id) {
   renderTryOnShelf();
 }
 
-/**
- * Clear all garments from try-on view
- */
+/** Clear all garments (called when closing try-on) */
 export function clearTryOnGarments() {
-  activeGarments = {};
-  garmentImages  = {};
-  smoothed       = {};
+  activeGarments  = {};
+  garmentImages   = {};
+  smoothed        = {};
+  cachedLandmarks = null;
   renderTryOnShelf();
 }
 
-/**
- * Render the garment shelf at the bottom of the try-on view
- */
+/** Render the bottom shelf of garment thumbnails */
 function renderTryOnShelf() {
   const row = document.getElementById('tryon-garment-row');
   if (!row) return;
 
   const garments = Object.values(activeGarments);
-  
+
   if (garments.length === 0) {
-    row.innerHTML = `
-      <div class="tryon-garment-empty" style="color:rgba(255,255,255,0.4);font-size:13px;padding:16px 0;">
-        Tap + to add garments
-      </div>
-    `;
+    row.innerHTML = `<div style="color:rgba(255,255,255,0.4);font-size:13px;padding:12px 4px">Tap + to add garments</div>`;
     return;
   }
 
   row.innerHTML = garments.map(g => `
-    <div class="tryon-garment-thumb active" data-id="${g.id}">
-      ${g.imageDataURL 
-        ? `<img src="${g.imageDataURL}" alt="${g.name}" />`
-        : `<span style="font-size:28px">${categoryEmoji(g.category)}</span>`
+    <div class="tryon-garment-thumb" data-id="${g.id}">
+      ${g.imageDataURL
+        ? `<img src="${g.imageDataURL}" alt="${g.name}" style="width:100%;height:100%;object-fit:cover;border-radius:10px;" />`
+        : `<span style="font-size:28px">${_emoji(g.category)}</span>`
       }
-      <div class="remove-x" data-id="${g.id}">✕</div>
+      <button class="remove-x" data-id="${g.id}" aria-label="Remove">✕</button>
     </div>
   `).join('');
 
   row.querySelectorAll('.remove-x').forEach(btn => {
-    btn.addEventListener('click', (e) => {
+    btn.addEventListener('click', e => {
       e.stopPropagation();
       removeGarmentFromTryOn(btn.dataset.id);
     });
   });
 }
 
-/**
- * Stop try-on and release resources
- */
+// ─── Stop / Cleanup ────────────────────────────
 export function stopTryOn() {
   isRunning = false;
-  poseDetected = false;
-  
-  if (animFrameId) {
-    cancelAnimationFrame(animFrameId);
-    animFrameId = null;
-  }
-  
-  if (tryonStream) {
-    tryonStream.getTracks().forEach(t => t.stop());
-    tryonStream = null;
-  }
-  
+  if (animFrameId) { cancelAnimationFrame(animFrameId); animFrameId = null; }
+  if (tryonStream) { tryonStream.getTracks().forEach(t => t.stop()); tryonStream = null; }
+
   const video = document.getElementById('tryon-video');
-  if (video) video.srcObject = null;
+  if (video) { video.srcObject = null; video.style.transform = ''; }
 
   const canvas = document.getElementById('tryon-canvas');
-  if (canvas) {
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-  }
+  if (canvas) canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
 
   clearTryOnGarments();
-  smoothed = {};
+  updatePoseStatus('loading', 'Initializing…');
 }
 
-/**
- * Update the pose detection status indicator
- */
+// ─── UI helpers ────────────────────────────────
 function updatePoseStatus(state, text) {
-  const statusEl = document.getElementById('pose-status');
-  const dotEl    = document.getElementById('pose-dot');
-  const textEl   = document.getElementById('pose-status-text');
-  if (!statusEl) return;
-  
-  if (dotEl) {
-    dotEl.className = 'pose-dot';
-    if (state === 'detected') dotEl.classList.add('detected');
+  const dot  = document.getElementById('pose-dot');
+  const textEl = document.getElementById('pose-status-text');
+  if (dot) {
+    dot.className = 'pose-dot';
+    if (state === 'detected') dot.classList.add('detected');
   }
   if (textEl) textEl.textContent = text;
 }
 
-// Export for use in app.js
-export function categoryEmoji(cat) {
-  const map = {
-    tshirt:'👕', shirt:'👔', jacket:'🧥', hoodie:'🫱',
-    pants:'👖', jeans:'👖', shorts:'🩳', dress:'👗',
-    skirt:'🪡', sweater:'🧶', shoes:'👟', other:'🛍️',
-  };
-  return map[cat] || '👕';
+function _emoji(cat) {
+  return { tshirt:'👕', shirt:'👔', jacket:'🧥', hoodie:'🥷', pants:'👖',
+           jeans:'👖', shorts:'🩳', dress:'👗', skirt:'👗', sweater:'🧶' }[cat] || '👕';
 }
