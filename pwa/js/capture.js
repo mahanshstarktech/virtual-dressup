@@ -480,20 +480,31 @@ async function processImage() {
 
   let processedDataURL = capturedDataURL;
   try {
-    // Dynamic import so the library only loads when actually used
-    const { removeBackground } = await import(
-      'https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.4.5/dist/background-removal.js'
-    );
     const blob = await fetch(capturedDataURL).then(r => r.blob());
-    const resultBlob = await removeBackground(blob, {
-      publicPath: 'https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.4.5/dist/',
-      model: 'small',
+    
+    // Send to our U2Net-Clothing Python backend
+    const formData = new FormData();
+    formData.append('file', blob, 'garment.jpg');
+
+    // Automatically use localhost when developing, and Render for production
+    const BACKEND_URL = window.location.hostname === 'localhost' 
+      ? 'http://localhost:8000' 
+      : 'https://drape-ai-backend.onrender.com';
+
+    const response = await fetch(`${BACKEND_URL}/api/remove-bg`, {
+      method: 'POST',
+      body: formData,
     });
+
+    if (!response.ok) throw new Error(`Backend returned ${response.status}`);
+    
+    const resultBlob = await response.blob();
     processedDataURL = await blobToDataURL(resultBlob);
-    console.log('[Capture] Background removed successfully');
+    console.log('[Capture] Background removed by U2Net-Clothing backend successfully');
   } catch (err) {
-    console.warn('[Capture] Background removal skipped:', err.message);
-    // No toast — failing silently is better UX here
+    console.warn('[Capture] Backend background removal failed:', err.message);
+    // Fall back to original image, but let the user know
+    showToast('AI background removal failed, using original', '⚠️');
   }
 
   capturedDataURL = processedDataURL;

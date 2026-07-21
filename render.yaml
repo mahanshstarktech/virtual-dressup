@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: drape-ai-backend
+    env: python
+    buildCommand: "cd backend && pip install -r requirements.txt"
+    startCommand: "cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.0
+      - key: U2NET_HOME
+        value: /opt/render/project/.u2net # Store models persistently to avoid re-downloading on restarts
