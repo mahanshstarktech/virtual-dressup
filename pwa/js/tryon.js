@@ -109,6 +109,9 @@ export async function startTryOn() {
 
     // Mirror the front camera so it feels like a mirror, not a selfie camera
     video.style.transform = 'scaleX(-1)';
+    const canvas = document.getElementById('tryon-canvas');
+    if (canvas) canvas.style.transform = 'scaleX(-1)';
+    
     await video.play();
 
     // Now initialise MediaPipe (downloads model if not cached)
@@ -283,7 +286,8 @@ function drawUpperGarment(ctx, img, ls, rs, lh, rh, type) {
   const gHeight = type === 'full' ? torsoH * 2.6 : torsoH * 1.15;
 
   // Tilt: angle of the shoulder line (so garment tilts with your body)
-  const tiltAngle = angle(ls, rs);
+  // We use angle(rs, ls) because in unmirrored coordinates, right shoulder is on the left.
+  const tiltAngle = angle(rs, ls);
 
   ctx.save();
   ctx.globalAlpha = 0.9;
@@ -402,7 +406,10 @@ export function stopTryOn() {
   if (video) { video.srcObject = null; video.style.transform = ''; }
 
   const canvas = document.getElementById('tryon-canvas');
-  if (canvas) canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+  if (canvas) { 
+    canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+    canvas.style.transform = '';
+  }
 
   clearTryOnGarments();
   updatePoseStatus('loading', 'Initializing…');
