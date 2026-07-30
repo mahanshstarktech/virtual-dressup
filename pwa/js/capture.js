@@ -482,25 +482,30 @@ async function processImage() {
   try {
     const blob = await fetch(capturedDataURL).then(r => r.blob());
     
-    // Send to our U2Net-Clothing Python backend
-    const formData = new FormData();
-    formData.append('file', blob, 'garment.jpg');
-
-    // Automatically use localhost when developing, and Hugging Face for production
-    const BACKEND_URL = window.location.hostname === 'localhost' 
-      ? 'http://localhost:8000' 
+    // Send to Gradio's native API — this is the only approach that properly
+    // triggers @spaces.GPU allocation on Hugging Face ZeroGPU.
+    const BACKEND_URL = window.location.hostname === 'localhost'
+      ? 'http://localhost:7860'
       : 'https://mahanshgaur-virtual-dressup-backend.hf.space';
 
-    const response = await fetch(`${BACKEND_URL}/api/remove-bg`, {
+    // Convert blob to base64 data URL for Gradio's JSON API
+    const base64Image = await blobToDataURL(blob);
+
+    const response = await fetch(`${BACKEND_URL}/api/predict`, {
       method: 'POST',
-      body: formData,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: [base64Image] }),
     });
 
     if (!response.ok) throw new Error(`Backend returned ${response.status}`);
-    
-    const resultBlob = await response.blob();
-    processedDataURL = await blobToDataURL(resultBlob);
-    console.log('[Capture] Background removed by U2Net-Clothing backend successfully');
+
+    const result = await response.json();
+    // Gradio returns { data: [{ url: "..." }] } or { data: ["data:image/png;base64,..."] }
+    const output = result.data?.[0];
+    if (output) {
+      processedDataURL = typeof output === 'string' ? output : (output.url || output);
+    }
+    console.log('[Capture] Background removed by U2Net-Clothing (ZeroGPU) successfully');
   } catch (err) {
     console.warn('[Capture] Backend background removal failed:', err.message);
     // Fall back to original image, but let the user know
