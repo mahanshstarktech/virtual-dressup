@@ -3,7 +3,11 @@
 // ═══════════════════════════════════════════════
 
 import { openCapture, closeCapture, initCapture } from './capture.js';
-import { startTryOn, stopTryOn, addGarmentToTryOn, clearTryOnGarments } from './tryon.js';
+import {
+  startTryOn, stopTryOn, clearTryOnGarments,
+  initSelfieCameraStep, captureSelfieFn, uploadSelfieFn, onSelfieFileChosen,
+  shareResult, tryAnotherGarment, retakeSelfie,
+} from './tryon.js';
 import { getAllGarments, getWardrobeStats, deleteGarment } from './wardrobe.js';
 import { showToast, haptic, formatCategory, categoryEmoji } from './utils.js';
 
@@ -238,80 +242,10 @@ async function launchTryOn() {
 
 // ─── Try-On Screen ──────────────────────────────
 async function initTryOnScreen() {
-  // Pre-load garments from selection
-  const garments = Object.values(selectedForTryOn);
-  
-  if (garments.length === 0) {
-    // Open garment picker immediately
-    openGarmentPicker();
-  }
-
   await startTryOn();
-
-  // Add pre-selected garments
-  for (const g of garments) {
-    await addGarmentToTryOn(g);
-  }
 }
 
-function openGarmentPicker() {
-  const sheet   = document.getElementById('garment-picker-sheet');
-  const overlay = document.getElementById('sheet-overlay');
-  if (!sheet || !overlay) return;
-
-  garmentPickerOpen = true;
-  renderGarmentPickerItems();
-  sheet.classList.add('open');
-  overlay.classList.add('open');
-}
-
-function closeGarmentPicker() {
-  garmentPickerOpen = false;
-  const sheet   = document.getElementById('garment-picker-sheet');
-  const overlay = document.getElementById('sheet-overlay');
-  sheet?.classList.remove('open');
-  overlay?.classList.remove('open');
-}
-
-async function renderGarmentPickerItems() {
-  const grid = document.getElementById('sheet-garment-grid');
-  if (!grid) return;
-
-  const garments = await getAllGarments();
-  
-  if (garments.length === 0) {
-    grid.innerHTML = `
-      <div style="grid-column:1/-1;text-align:center;padding:32px;color:var(--text-secondary);">
-        <div style="font-size:40px;margin-bottom:12px">👗</div>
-        <div style="font-weight:600">Wardrobe is empty</div>
-        <div style="font-size:13px;margin-top:6px">Capture garments first</div>
-      </div>
-    `;
-    return;
-  }
-
-  grid.innerHTML = garments.map(g => `
-    <div class="sheet-garment-item" onclick="window.drapeApp.addToTryOn('${g.id}')">
-      <div class="sheet-garment-item__img">
-        ${g.imageDataURL 
-          ? `<img src="${g.imageDataURL}" alt="${g.name}" style="width:100%;height:100%;object-fit:cover;" />`
-          : `<span>${categoryEmoji(g.category)}</span>`
-        }
-      </div>
-      <div class="sheet-garment-item__name">${g.name}</div>
-    </div>
-  `).join('');
-}
-
-async function addToTryOn(id) {
-  const garments = await getAllGarments();
-  const garment  = garments.find(g => g.id === id);
-  if (!garment) return;
-  await addGarmentToTryOn(garment);
-  closeGarmentPicker();
-  haptic('medium');
-  showToast(`${garment.name} added`, categoryEmoji(garment.category));
-}
+// (removed — garment selection is now handled inside the try-on screen itself)
 
 // ─── Settings Screen ───────────────────────────
 function initSettings() {
@@ -392,18 +326,28 @@ function setupEventListeners() {
   // Try-on launch from wardrobe
   document.getElementById('tryon-launch-btn')?.addEventListener('click', launchTryOn);
 
-  // Try-on close
-  document.getElementById('tryon-close-btn')?.addEventListener('click', () => {
-    stopTryOn();
-    clearTryOnGarments();
-    switchTab('wardrobe');
+  // Try-on screen: selfie step buttons
+  document.getElementById('tryon-back-to-garments')?.addEventListener('click', () => {
+    startTryOn(); // resets to step 1
   });
+  document.getElementById('tryon-capture-selfie-btn')?.addEventListener('click', captureSelfieFn);
+  document.getElementById('tryon-upload-selfie-btn')?.addEventListener('click', uploadSelfieFn);
+  document.getElementById('tryon-selfie-upload')?.addEventListener('change', onSelfieFileChosen);
 
-  // Try-on add garment button
-  document.getElementById('tryon-add-btn')?.addEventListener('click', openGarmentPicker);
+  // Try-on result buttons
+  document.getElementById('tryon-share-btn')?.addEventListener('click', shareResult);
+  document.getElementById('tryon-retry-selfie-btn')?.addEventListener('click', retakeSelfie);
+  document.getElementById('tryon-another-garment-btn')?.addEventListener('click', tryAnotherGarment);
 
-  // Sheet overlay close
-  document.getElementById('sheet-overlay')?.addEventListener('click', closeGarmentPicker);
+  // Initialise selfie camera when selfie step becomes visible
+  const selfieObserver = new MutationObserver(() => {
+    const selfieStep = document.getElementById('step-take-selfie');
+    if (selfieStep?.classList.contains('active')) {
+      initSelfieCameraStep();
+    }
+  });
+  const selfieStep = document.getElementById('step-take-selfie');
+  if (selfieStep) selfieObserver.observe(selfieStep, { attributes: true, attributeFilter: ['class'] });
 
   // Capture lifecycle
   window.addEventListener('capture-closed', () => {
@@ -460,7 +404,6 @@ window.drapeApp = {
   openCapture,
   viewGarment,
   toggleGarmentSelection,
-  addToTryOn,
   deleteGarment: handleDeleteGarment,
   switchTab,
 };

@@ -1,4 +1,4 @@
-rembg[cpu]
 gradio
+gradio_client
 spaces
 Pillow

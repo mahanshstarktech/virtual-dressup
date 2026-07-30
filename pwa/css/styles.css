@@ -1997,3 +1997,406 @@ body {
   transform: scale(1.05);
 }
 .carousel-thumb:active { opacity: 0.7; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   AI TRY-ON SCREEN — 4-Step Photo Generation Flow
+   Step 1: Pick garment  →  Step 2: Take selfie  →  Step 3: AI gen  →  Step 4: Result
+═══════════════════════════════════════════════════════════════════════════ */
+
+/* Step container — only one active at a time */
+.tryon-step {
+  display: none;
+  flex-direction: column;
+  height: 100%;
+  overflow-y: auto;
+  padding: 0 0 calc(var(--tab-bar-height) + 16px);
+}
+.tryon-step.active {
+  display: flex;
+}
+
+/* Shared header */
+.tryon-step-header {
+  padding: 24px 20px 12px;
+}
+.tryon-step-title {
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  color: var(--text-primary);
+  margin: 0 0 4px;
+}
+.tryon-step-sub {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+/* ── Step 1: Garment Picker Grid ── */
+.tryon-garment-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+  padding: 8px 16px 24px;
+}
+
+.tryon-garment-card {
+  background: var(--surface);
+  border-radius: var(--radius-xl);
+  border: 1.5px solid var(--border);
+  overflow: hidden;
+  padding: 0;
+  text-align: center;
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+  display: flex;
+  flex-direction: column;
+}
+.tryon-garment-card:active {
+  transform: scale(0.96);
+}
+.tryon-garment-card img {
+  width: 100%;
+  aspect-ratio: 3/4;
+  object-fit: cover;
+  display: block;
+}
+.tryon-garment-emoji {
+  font-size: 52px;
+  aspect-ratio: 3/4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-2);
+}
+.tryon-garment-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  padding: 8px 10px 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tryon-garment-category {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  padding: 0 10px 10px;
+  text-transform: capitalize;
+}
+
+.tryon-empty-state {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: 48px 24px;
+}
+.tryon-empty-icon { font-size: 52px; margin-bottom: 12px; }
+.tryon-empty-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+.tryon-empty-sub {
+  font-size: 14px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+/* ── Step 2: Selfie Capture ── */
+.tryon-back-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 15px;
+  font-weight: 600;
+  padding: 16px 20px 8px;
+  cursor: pointer;
+}
+
+.tryon-selected-chip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 16px 12px;
+  background: var(--surface);
+  border-radius: var(--radius-xl);
+  padding: 10px 14px;
+  border: 1.5px solid var(--border);
+}
+.tryon-selected-chip__thumb {
+  width: 44px;
+  height: 56px;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--surface-2);
+  flex-shrink: 0;
+}
+.tryon-selected-chip__thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.tryon-selected-chip__label {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+}
+.tryon-selected-chip__name {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-top: 2px;
+}
+
+.tryon-selfie-container {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: #000;
+  margin: 0 16px;
+  border-radius: var(--radius-2xl);
+}
+
+#tryon-selfie-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Human silhouette guide */
+.tryon-selfie-guide {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.tryon-selfie-guide svg {
+  height: 85%;
+  width: auto;
+  opacity: 0.8;
+}
+
+.tryon-selfie-tip {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0,0,0,0.55);
+  color: rgba(255,255,255,0.9);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 14px;
+  border-radius: 20px;
+  white-space: nowrap;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.tryon-selfie-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  padding: 16px 20px 8px;
+}
+
+/* Upload button */
+.tryon-upload-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  background: rgba(255,255,255,0.08);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-xl);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 10px 14px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.tryon-upload-btn:active { background: rgba(255,255,255,0.15); }
+
+/* Shutter button */
+.tryon-shutter-btn {
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  background: white;
+  border: 4px solid rgba(255,255,255,0.4);
+  box-shadow: 0 0 0 3px rgba(255,255,255,0.3), 0 4px 16px rgba(0,0,0,0.3);
+  cursor: pointer;
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+  flex-shrink: 0;
+}
+.tryon-shutter-btn:active {
+  transform: scale(0.92);
+  box-shadow: 0 0 0 2px rgba(255,255,255,0.2), 0 2px 8px rgba(0,0,0,0.3);
+}
+
+/* ── Step 3: AI Generating ── */
+.tryon-generating-view {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  padding: 32px 24px;
+  text-align: center;
+}
+
+/* Animated orbs */
+.tryon-gen-animation {
+  position: relative;
+  width: 140px;
+  height: 140px;
+  margin-bottom: 32px;
+}
+.tryon-gen-orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(18px);
+  opacity: 0.7;
+  animation: orb-float 3s ease-in-out infinite;
+}
+.tryon-gen-orb--1 {
+  width: 80px; height: 80px;
+  background: var(--gradient-accent);
+  top: 10px; left: 10px;
+  animation-delay: 0s;
+}
+.tryon-gen-orb--2 {
+  width: 60px; height: 60px;
+  background: linear-gradient(135deg, #EC4899, #8B5CF6);
+  top: 50px; left: 60px;
+  animation-delay: -1s;
+}
+.tryon-gen-orb--3 {
+  width: 50px; height: 50px;
+  background: linear-gradient(135deg, #06B6D4, #6366F1);
+  top: 20px; left: 70px;
+  animation-delay: -2s;
+}
+@keyframes orb-float {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33%       { transform: translate(8px, -8px) scale(1.08); }
+  66%       { transform: translate(-6px, 6px) scale(0.95); }
+}
+
+.tryon-gen-icon {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 44px;
+  animation: pulse-icon 2s ease-in-out infinite;
+}
+@keyframes pulse-icon {
+  0%, 100% { transform: scale(1); }
+  50%       { transform: scale(1.12); }
+}
+
+.tryon-gen-title {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--text-primary);
+  margin: 0 0 8px;
+}
+.tryon-gen-message {
+  font-size: 15px;
+  color: var(--text-secondary);
+  margin: 0 0 28px;
+  min-height: 22px;
+  transition: opacity 0.3s ease;
+}
+
+/* Animated progress bar */
+.tryon-gen-progress {
+  width: 200px;
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+.tryon-gen-progress-bar {
+  height: 100%;
+  background: var(--gradient-accent);
+  border-radius: 2px;
+  animation: progress-fill 40s linear forwards;
+}
+@keyframes progress-fill {
+  0%   { width: 0%; }
+  80%  { width: 90%; }
+  100% { width: 95%; }
+}
+
+.tryon-gen-eta {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin: 0;
+}
+
+/* ── Step 4: Result ── */
+.tryon-result-compare {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  padding: 8px 16px 16px;
+}
+
+.tryon-compare-card {
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+  position: relative;
+  background: var(--surface-2);
+  border: 1.5px solid var(--border);
+}
+.tryon-compare-card--result {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+}
+.tryon-compare-card img {
+  width: 100%;
+  aspect-ratio: 3/4;
+  object-fit: cover;
+  display: block;
+}
+.tryon-compare-label {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  background: rgba(0,0,0,0.6);
+  color: white;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 10px;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+.tryon-result-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 16px 24px;
+}
+.tryon-result-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
